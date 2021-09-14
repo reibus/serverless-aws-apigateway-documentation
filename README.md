@@ -315,6 +315,16 @@ By adding the `import` property to the documentation section of your model you c
 NOTE: This works for requestModels and respondeModels as well.
       Use the same name that you see in the model section on aws api gateway - i.e. "ExampleRequestModelName" not "ExampleRequestModelNameModel"
 
+### Uploading documentation parts from different stacks
+With the variable "update" the plugin will be able to update without removing the documentation parts that are necessary for a certain version.
+
+``` YAML
+custom:
+  documentation:
+    version: '1'
+    update: true
+```
+
 ### If you are getting "too many requests" errors from CloudFormation
 
 You can activate the split models feature by adding this snippet to the provider section:
