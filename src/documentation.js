@@ -44,6 +44,29 @@ function determinePropertiesToGet (type) {
 
 }
 
+function prepareDocumentationParts(futureParts, { items: currentParts }) {
+  return futureParts.reduce((prev, { restApiId, location, properties }, i) => {
+    const hasPart = currentParts.find((part) => {
+      return part.location && part.location.type === location.type &&
+        part.location.path === `/${location.path}` &&
+        part.location.method === location.method &&
+        part.location.statusCode === location.statusCode && 
+        part.location.name === location.name
+    });
+
+    if (hasPart) {
+      if (JSON.stringify(properties) !== hasPart.properties) {
+        prev.toDelete.push({ id: hasPart.id });
+        prev.toUpload.push({ location, properties, restApiId });
+      }
+    } else {
+      prev.toUpload.push({ location, properties, restApiId });
+    }
+
+    return prev
+  }, { toDelete: [], toUpload: [] })
+}
+
 var autoVersion;
 
 module.exports = function() {
@@ -94,46 +117,57 @@ module.exports = function() {
     },
 
     _updateDocumentation: function _updateDocumentation() {
+      const update = this.customVars.documentation.update;
+      let createVersion = false;
       const aws = this.serverless.providers.aws;
       return aws.request('APIGateway', 'getDocumentationVersion', {
         restApiId: this.restApiId,
         documentationVersion: this.getDocumentationVersion(),
       }).then(() => {
-          const msg = 'documentation version already exists, skipping upload';
+          let msg = `documentation version already exists, ${ update ? 'uploading' : 'skipping upload' }`;
           console.info('-------------------');
           console.info(msg);
-          return Promise.reject(msg);
+          return update ? Promise.resolve(msg) : Promise.reject(msg);
         }, err => {
           if (err.providerError && err.providerError.statusCode === 404) {
+            createVersion = true;
             return Promise.resolve();
           }
 
           return Promise.reject(err);
         })
-        .then(() =>
-          aws.request('APIGateway', 'getDocumentationParts', {
+        .then(() => aws.request('APIGateway', 'getDocumentationParts', {
             restApiId: this.restApiId,
             limit: 9999,
           })
         )
-        .then(results => results.items.map(
-          part => aws.request('APIGateway', 'deleteDocumentationPart', {
+        .then(results => {
+          if (update) {
+            const { toDelete, toUpload } = prepareDocumentationParts(this.documentationParts, results)
+            results.items = toDelete;
+            this.documentationParts = toUpload;
+          }
+          
+          return results.items.map(part => aws.request('APIGateway', 'deleteDocumentationPart', {
             documentationPartId: part.id,
             restApiId: this.restApiId,
-          })
-        ))
+          }))
+        })
         .then(promises => Promise.all(promises))
-        .then(() => this.documentationParts.reduce((promise, part) => {
+        .then(() => {
+          this.documentationParts.reduce((promise, part) => {
           return promise.then(() => {
             part.properties = JSON.stringify(part.properties);
             return aws.request('APIGateway', 'createDocumentationPart', part);
           });
-        }, Promise.resolve()))
-        .then(() => aws.request('APIGateway', 'createDocumentationVersion', {
-          restApiId: this.restApiId,
-          documentationVersion: this.getDocumentationVersion(),
-          stageName: this.options.stage,
-        }));
+        }, Promise.resolve())
+      }).then(() => {
+          return createVersion ? aws.request('APIGateway', 'createDocumentationVersion', {
+            restApiId: this.restApiId,
+            documentationVersion: this.getDocumentationVersion(),
+            stageName: this.options.stage,
+          }): Promise.resolve();
+      });
     },
 
     getGlobalDocumentationParts: function getGlobalDocumentationParts() {
