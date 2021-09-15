@@ -162,8 +162,8 @@ module.exports = function() {
           });
         }, Promise.resolve())
       }).then(() => {
-          return createVersion ? aws.request('APIGateway', 'createDocumentationVersion', {
-            restApiId: this.restApiId,
+        return createVersion && this.documentationParts.length ? aws.request('APIGateway', 'createDocumentationVersion', {
+          restApiId: this.restApiId,
             documentationVersion: this.getDocumentationVersion(),
             stageName: this.options.stage,
           }): Promise.resolve();
