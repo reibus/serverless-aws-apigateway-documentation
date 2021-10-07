@@ -5,6 +5,8 @@ const objectHash = require('object-hash');
 const globalDocumentationParts = require('./globalDocumentationParts.json');
 const functionDocumentationParts = require('./functionDocumentationParts.json');
 
+const untoldPart = ['API', 'MODEL'];
+
 function getDocumentationProperties(def, propertiesToGet) {
   const docProperties = new Map();
   propertiesToGet.forEach((key) => {
@@ -65,6 +67,10 @@ function prepareDocumentationParts(futureParts, { items: currentParts }) {
 
     return prev
   }, { toDelete: [], toUpload: [] })
+}
+
+function getDocumentationMethods(documentationParts) {
+  return documentationParts.filter(part => part && part.location && !untoldPart.includes(part.location.type));
 }
 
 var autoVersion;
@@ -162,7 +168,8 @@ module.exports = function() {
           });
         }, Promise.resolve())
       }).then(() => {
-        return createVersion && this.documentationParts.length ? aws.request('APIGateway', 'createDocumentationVersion', {
+        const methodsParts = getDocumentationMethods(this.documentationParts);
+        return createVersion && methodsParts.length ? aws.request('APIGateway', 'createDocumentationVersion', {
           restApiId: this.restApiId,
             documentationVersion: this.getDocumentationVersion(),
             stageName: this.options.stage,

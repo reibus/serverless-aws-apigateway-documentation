@@ -1,6 +1,6 @@
 {
   "name": "@reibus/serverless-aws-apigateway-documentation",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "Serverless 1.0 plugin to add documentation and models to the serverless generated API Gateway",
   "main": "src/index.js",
   "scripts": {
