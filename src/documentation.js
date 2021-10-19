@@ -161,7 +161,7 @@ module.exports = function() {
         return Promise.reject(err);
       }
 
-      const results = await getDocumentationPartsPromise(aws, this.restApiId);
+      let results = await getDocumentationPartsPromise(aws, this.restApiId);
 
       if (update) {
         const { toDelete, toUpload } = prepareDocumentationParts(this.documentationParts, results)
