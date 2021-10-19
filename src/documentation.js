@@ -46,7 +46,7 @@ function determinePropertiesToGet (type) {
 
 }
 
-function prepareDocumentationParts(futureParts, { items: currentParts }) {
+function prepareDocumentationParts(futureParts, currentParts ) {
   return futureParts.reduce((prev, { restApiId, location, properties }, i) => {
     const hasPart = currentParts.find((part) => {
       return part.location && part.location.type === location.type &&
@@ -71,6 +71,27 @@ function prepareDocumentationParts(futureParts, { items: currentParts }) {
 
 function getDocumentationMethods(documentationParts) {
   return documentationParts.filter(part => part && part.location && !untoldPart.includes(part.location.type));
+}
+
+async function getDocumentationPartsPromise(aws, restApiId) {
+  let documentationResults = [];
+  let prevPosition;
+  let response;
+  do {
+    const data = {
+      restApiId: restApiId,
+      limit: 500,
+    }
+    if (prevPosition) {
+      data.position = prevPosition
+    }
+    response = await aws.request('APIGateway', 'getDocumentationParts', data);
+
+    documentationResults = response.items.length ? [ ...documentationResults, ...response.items ] : documentationResults
+    prevPosition = response.position;
+  } while(!!response.position)
+
+  return documentationResults
 }
 
 var autoVersion;
@@ -121,60 +142,53 @@ module.exports = function() {
         }
       });
     },
-
-    _updateDocumentation: function _updateDocumentation() {
+    _updateDocumentationAsync: async function _updateDocumentationAsync() {
       const update = this.customVars.documentation.update;
       let createVersion = false;
       const aws = this.serverless.providers.aws;
-      return aws.request('APIGateway', 'getDocumentationVersion', {
-        restApiId: this.restApiId,
-        documentationVersion: this.getDocumentationVersion(),
-      }).then(() => {
-          let msg = `documentation version already exists, ${ update ? 'uploading' : 'skipping upload' }`;
-          console.info('-------------------');
-          console.info(msg);
-          return update ? Promise.resolve(msg) : Promise.reject(msg);
-        }, err => {
-          if (err.providerError && err.providerError.statusCode === 404) {
-            createVersion = true;
-            return Promise.resolve();
-          }
-
-          return Promise.reject(err);
-        })
-        .then(() => aws.request('APIGateway', 'getDocumentationParts', {
-            restApiId: this.restApiId,
-            limit: 9999,
-          })
-        )
-        .then(results => {
-          if (update) {
-            const { toDelete, toUpload } = prepareDocumentationParts(this.documentationParts, results)
-            results.items = toDelete;
-            this.documentationParts = toUpload;
-          }
-          
-          return results.items.map(part => aws.request('APIGateway', 'deleteDocumentationPart', {
-            documentationPartId: part.id,
-            restApiId: this.restApiId,
-          }))
-        })
-        .then(promises => Promise.all(promises))
-        .then(() => {
-          this.documentationParts.reduce((promise, part) => {
-          return promise.then(() => {
-            part.properties = JSON.stringify(part.properties);
-            return aws.request('APIGateway', 'createDocumentationPart', part);
-          });
-        }, Promise.resolve())
-      }).then(() => {
-        const methodsParts = getDocumentationMethods(this.documentationParts);
-        return createVersion && methodsParts.length ? aws.request('APIGateway', 'createDocumentationVersion', {
+      
+      try {
+        await aws.request('APIGateway', 'getDocumentationVersion', {
           restApiId: this.restApiId,
-            documentationVersion: this.getDocumentationVersion(),
-            stageName: this.options.stage,
-          }): Promise.resolve();
-      });
+          documentationVersion: this.getDocumentationVersion(),
+        });
+      } catch (error) {
+        if (err.providerError && err.providerError.statusCode === 404) {
+          createVersion = true;
+          return Promise.resolve();
+        }
+
+        return Promise.reject(err);
+      }
+
+      const results = await getDocumentationPartsPromise(aws, this.restApiId);
+
+      if (update) {
+        const { toDelete, toUpload } = prepareDocumentationParts(this.documentationParts, results)
+        results = toDelete;
+        this.documentationParts = toUpload;
+      }
+
+      const deleteDocumentationParts = results.map(part => aws.request('APIGateway', 'deleteDocumentationPart', {
+        documentationPartId: part.id,
+        restApiId: this.restApiId,
+      }))
+
+      await Promise.all(deleteDocumentationParts);
+
+      await this.documentationParts.reduce((promise, part) => {
+        return promise.then(() => {
+          part.properties = JSON.stringify(part.properties);
+          return aws.request('APIGateway', 'createDocumentationPart', part);
+        });
+      }, Promise.resolve())
+
+      const methodsParts = getDocumentationMethods(this.documentationParts);
+      return createVersion && methodsParts.length ? aws.request('APIGateway', 'createDocumentationVersion', {
+         restApiId: this.restApiId,
+          documentationVersion: this.getDocumentationVersion(),
+          stageName: this.options.stage,
+        }): Promise.resolve();
     },
 
     getGlobalDocumentationParts: function getGlobalDocumentationParts() {
@@ -226,7 +240,7 @@ module.exports = function() {
       return this.customVars.documentation.version || autoVersion || this.generateAutoDocumentationVersion();
     },
 
-    _buildDocumentation: function _buildDocumentation(result) {
+    _buildDocumentation: async function _buildDocumentation(result) {
       this.restApiId = result.Stacks[0].Outputs
         .filter(output => output.OutputKey === 'AwsDocApiId')
         .map(output => output.OutputValue)[0];
@@ -241,7 +255,7 @@ module.exports = function() {
         return;
       }
 
-      return this._updateDocumentation();
+      return this._updateDocumentationAsync();
     },
 
     addDocumentationToApiGateway: function addDocumentationToApiGateway(resource, documentationPart, mapPath) {
