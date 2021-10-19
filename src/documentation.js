@@ -152,7 +152,7 @@ module.exports = function() {
           restApiId: this.restApiId,
           documentationVersion: this.getDocumentationVersion(),
         });
-      } catch (error) {
+      } catch (err) {
         if (err.providerError && err.providerError.statusCode === 404) {
           createVersion = true;
           return Promise.resolve();
