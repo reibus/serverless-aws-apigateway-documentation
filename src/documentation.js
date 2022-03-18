@@ -47,7 +47,7 @@ function determinePropertiesToGet (type) {
 }
 
 function prepareDocumentationParts(futureParts, currentParts ) {
-  return futureParts.reduce((prev, { restApiId, location, properties }, i) => {
+  let updateParts = futureParts.reduce((prev, { restApiId, location, properties }) => {
     const hasPart = currentParts.find((part) => {
       return part.location && part.location.type === location.type &&
         part.location.path === `/${location.path}` &&
@@ -67,6 +67,28 @@ function prepareDocumentationParts(futureParts, currentParts ) {
 
     return prev
   }, { toDelete: [], toUpload: [] })
+
+  updateParts = currentParts.reduce((prev, { id, location }) => {
+    const hasPart = futureParts.find((part) => {
+      return part.location && part.location.type === location.type &&
+        part.location.path === `/${location.path}` &&
+        part.location.method === location.method &&
+        part.location.statusCode === location.statusCode && 
+        part.location.name === location.name
+    });
+    console.log({hasPart});
+    if (!hasPart) {
+      prev.toDelete.push({ id });
+    }
+
+    return prev
+  }, updateParts)
+  console.log("----UPDATE PARTS----");
+  console.log({
+    futureParts,
+    currentParts
+  });
+  return updateParts
 }
 
 function getDocumentationMethods(documentationParts) {
@@ -148,27 +170,26 @@ module.exports = function() {
       const aws = this.serverless.providers.aws;
       
       try {
+        const documentationVersion = this.getDocumentationVersion()
         await aws.request('APIGateway', 'getDocumentationVersion', {
           restApiId: this.restApiId,
-          documentationVersion: this.getDocumentationVersion(),
+          documentationVersion,
         });
       } catch (err) {
         if (err.providerError && err.providerError.statusCode === 404) {
           createVersion = true;
-          return Promise.resolve();
         }
-
-        return Promise.reject(err);
+        else {
+          return Promise.reject(err);
+        }
       }
 
       let results = await getDocumentationPartsPromise(aws, this.restApiId);
-
       if (update) {
         const { toDelete, toUpload } = prepareDocumentationParts(this.documentationParts, results)
         results = toDelete;
         this.documentationParts = toUpload;
       }
-
       const deleteDocumentationParts = results.map(part => aws.request('APIGateway', 'deleteDocumentationPart', {
         documentationPartId: part.id,
         restApiId: this.restApiId,
@@ -281,6 +302,7 @@ module.exports = function() {
         resource.DependsOn = new Set();
         this.addMethodResponses(resource, eventTypes.http.documentation);
         this.addRequestModels(resource, eventTypes.http.documentation);
+
         if (!this.options['doc-safe-mode']) {
           this.addDocumentationToApiGateway(
             resource,
