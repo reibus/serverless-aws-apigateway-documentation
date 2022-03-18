@@ -46,8 +46,10 @@ function determinePropertiesToGet (type) {
 
 }
 
-function prepareDocumentationParts(futureParts, currentParts ) {
-  let updateParts = futureParts.reduce((prev, { restApiId, location, properties }) => {
+function prepareDocumentationParts(remoteDocumentationParts, currentParts ) {
+  // find existing pieces and new pieces of the documentation
+
+  let localDocumentationParts = remoteDocumentationParts.reduce((prev, { restApiId, location, properties }) => {
     const hasPart = currentParts.find((part) => {
       return part.location && part.location.type === location.type &&
         part.location.path === `/${location.path}` &&
@@ -68,27 +70,24 @@ function prepareDocumentationParts(futureParts, currentParts ) {
     return prev
   }, { toDelete: [], toUpload: [] })
 
-  updateParts = currentParts.reduce((prev, { id, location }) => {
-    const hasPart = futureParts.find((part) => {
+  // find pieces of the documentation to delete
+  localDocumentationParts = currentParts.reduce((prev, { id, location }) => {
+    const hasPart = remoteDocumentationParts.find((part) => {
       return part.location && part.location.type === location.type &&
         part.location.path === `/${location.path}` &&
         part.location.method === location.method &&
         part.location.statusCode === location.statusCode && 
         part.location.name === location.name
     });
-    console.log({hasPart});
+
     if (!hasPart) {
       prev.toDelete.push({ id });
     }
 
     return prev
-  }, updateParts)
-  console.log("----UPDATE PARTS----");
-  console.log({
-    futureParts,
-    currentParts
-  });
-  return updateParts
+  }, localDocumentationParts)
+
+  return localDocumentationParts
 }
 
 function getDocumentationMethods(documentationParts) {
@@ -177,6 +176,7 @@ module.exports = function() {
         });
       } catch (err) {
         if (err.providerError && err.providerError.statusCode === 404) {
+          console.info("Creating new documentation version")
           createVersion = true;
         }
         else {
@@ -253,7 +253,7 @@ module.exports = function() {
       });
 
       autoVersion = objectHash(versionObject);
-
+      console.info("New Documentation version: ", autoVersion)
       return autoVersion;
     },
 
