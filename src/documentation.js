@@ -40,7 +40,7 @@ function createDocumentationRequests(aws, { documentationToUpsert, documentation
       return{ 
         request: aws.request('APIGateway', 'deleteDocumentationPart', {
           documentationPartId: part.id,
-          restApiId: this.restApiId,
+          restApiId: part.restApiId,
         }),
         part
       }
@@ -70,8 +70,7 @@ async function resolveDocumentationRequests(requests) {
   let duplicates = 0
   for (let index = 0; index < requests.length; index++) {
     const request = requests[index];
-    request.request.
-      then((response) => response.JSON())
+    request.request
       .then(data => console.log(data))
       .catch((error) => {
         if (error.providerErrorCodeExtension === "CONFLICT_EXCEPTION") {
@@ -104,32 +103,39 @@ function determinePropertiesToGet (type) {
 
 }
 
+/**
+ * Commpares parts already existing in the API (currentParts) 
+ * to parts to be introduced or updated (futureParts).
+ * currentParts with a delete: true property will be deleted 
+ * or ignored
+ * @param {*} futureParts  Array of parts to be updated
+ * @param {*} currentParts  Array of parts in the API
+ * @returns {*} documentationParts
+ */
 function prepareDocumentationParts(futureParts, currentParts ) {
-  console.log(futureParts.find((part) => {
-    return part.location.name === "PostTrackingRatingsResponse"
-  }));
-  console.log(currentParts.find((part) => {
-    return part.location.name === "PostTrackingRatingsResponse"
-  }));
   return futureParts.reduce((prev, { restApiId, location, properties }, i) => {
     const hasPart = currentParts.find((part) => {
+      const locationPath = location.path ? `/${location.path}` : undefined
       return part.location && part.location.type === location.type &&
-      part.location.path === `/${location.path}` &&
+      part.location.path === locationPath &&
       part.location.method === location.method &&
       part.location.statusCode === location.statusCode && 
       part.location.name === location.name
     });
     if (hasPart) {
-      if (JSON.stringify(properties) !== hasPart.properties) {
-        // Updates an already existing piece of documentation (sometimes it doesn't work)
-        prev.toDelete.push({ id: hasPart.id });
-        prev.toUpload.push({ location, properties, restApiId });
+      if (JSON.parse(hasPart.properties).delete) {
+        prev.toDelete.push({ id: hasPart.id, restApiId });
+        return prev
+      } else{
+        if (JSON.stringify(properties) !== hasPart.properties) {
+          prev.toDelete.push({ id: hasPart.id, restApiId });
+          prev.toUpload.push({ location, properties, restApiId });
+        }
       }
     } else {
-      if (properties.delete && properties.delete === false){
-        console.log({restApiId, location, properties})
+      if (!properties.delete) {
+        prev.toUpload.push({ location, properties, restApiId });
       }
-      prev.toUpload.push({ location, properties, restApiId });
     }
     return prev
   }, { toDelete: [], toUpload: [] })
@@ -169,8 +175,10 @@ module.exports = function() {
         loc[property] = knownLocation[property] || def[property];
         return loc;
       }, {});
-      location.type = part.type;      
+      location.type = part.type;
+      
       const propertiesToGet = determinePropertiesToGet(location.type)
+      
       const props = getDocumentationProperties(def, propertiesToGet);
       if (props.size > 0) {
         this.documentationParts.push({
