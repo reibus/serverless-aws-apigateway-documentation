@@ -71,7 +71,7 @@ async function resolveDocumentationRequests(requests) {
   for (let index = 0; index < requests.length; index++) {
     const request = requests[index];
     request.request
-      .then(data => console.log(data))
+      .then()
       .catch((error) => {
         if (error.providerErrorCodeExtension === "CONFLICT_EXCEPTION") {
           duplicates = duplicates + 1
@@ -81,6 +81,7 @@ async function resolveDocumentationRequests(requests) {
       })
   }
   console.log("Duplicate pieces of documentation: ", duplicates)
+  return Promise.resolve()
 }
 
 /*
@@ -103,15 +104,6 @@ function determinePropertiesToGet (type) {
 
 }
 
-/**
- * Commpares parts already existing in the API (currentParts) 
- * to parts to be introduced or updated (futureParts).
- * currentParts with a delete: true property will be deleted 
- * or ignored
- * @param {*} futureParts  Array of parts to be updated
- * @param {*} currentParts  Array of parts in the API
- * @returns {*} documentationParts
- */
 function prepareDocumentationParts(futureParts, currentParts ) {
   return futureParts.reduce((prev, { restApiId, location, properties }, i) => {
     const hasPart = currentParts.find((part) => {
@@ -219,6 +211,7 @@ module.exports = function() {
       console.log("----- _updateDocumentationAsync -----");
       const aws = this.serverless.providers.aws;
       const update = this.customVars.documentation.update;
+      const concurrency = this.customVars.documentation.concurrency || 100;
       let createVersion = false;
       let documentationToUpsert = this.documentationParts
       let documentationToDelete = []
@@ -244,13 +237,20 @@ module.exports = function() {
         documentationToDelete
       })
       
-      resolveDocumentationRequests(requests)
-        .then( () => {
-          console.log("documentation updated")
-        })
-        .catch( () => {
-          console.error("error in updating documentation");
-        })
+      try {
+        console.log("sending documentation requests");
+        console.log("documentation request concurrency: ", concurrency);
+        let i = 0
+        while (requests.length) {
+          i += 1
+          console.log("iterations: ", i);
+          await resolveDocumentationRequests(requests.splice(0, concurrency))     
+        }
+      } catch (error) {
+        console.error("error in updating documentation", error);
+      }
+      console.log("finished documentation requests");
+
       const methodsParts = getDocumentationMethods(this.documentationParts);
       return createVersion && methodsParts.length ? aws.request('APIGateway', 'createDocumentationVersion', {
          restApiId: this.restApiId,
