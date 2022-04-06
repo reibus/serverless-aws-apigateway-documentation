@@ -26,13 +26,71 @@ function _mapToObj(map) {
   return returnObj;
 }
 
+/**
+ * maps requests to delete to an array containing the promise and the body of the request
+ * @param {aws} provider
+ * @param {documentationPieces} Object, contains documentationToUpsert and documentationToDelete
+ * @returns request type array
+ */
+function createDocumentationRequests(aws, { documentationToUpsert, documentationToDelete }) {
+  let requests = []
+  // delete documentation parts
+  requests = requests.concat(
+    documentationToDelete.map(part => {
+      return { 
+        request: aws.request('APIGateway', 'deleteDocumentationPart', {
+          documentationPartId: part.id,
+          restApiId: part.restApiId,
+        }),
+        part
+      }
+    })
+  )
+  // upsert documentation parts
+  requests = requests.concat(
+    documentationToUpsert.map(part => {
+      return {
+        request: aws.request('APIGateway', 'createDocumentationPart', {
+          ...part,
+          properties: JSON.stringify(part.properties)
+        }),
+        part
+      }
+    })
+  )
+  return requests
+}
+
+/**
+ * Resolves all documentation part requests and ignores duplicates 
+ * @param requests Object Array 
+ */
+async function resolveDocumentationRequests(requests) {
+  console.log("---- resolveDocumentationRequests ----");
+  let duplicates = 0
+  for (let index = 0; index < requests.length; index++) {
+    const request = requests[index];
+    request.request
+      .then()
+      .catch((error) => {
+        if (error.providerErrorCodeExtension === "CONFLICT_EXCEPTION") {
+          duplicates = duplicates + 1
+        } else {
+          throw error
+        }
+      })
+  }
+  console.log("Duplicate pieces of documentation: ", duplicates)
+  return Promise.resolve()
+}
+
 /*
  * Different types support different extra properties beyond
  * the basic ones, so we need to make sure we only look for
  * the appropriate properties.
  */
 function determinePropertiesToGet (type) {
-  const defaultProperties = ['description', 'summary']
+  const defaultProperties = ['description', 'summary', 'delete']
   let result = defaultProperties
   switch (type) {
     case 'API':
@@ -46,48 +104,33 @@ function determinePropertiesToGet (type) {
 
 }
 
-function prepareDocumentationParts(remoteDocumentationParts, currentParts ) {
-  // find existing pieces and new pieces of the documentation
-
-  let localDocumentationParts = remoteDocumentationParts.reduce((prev, { restApiId, location, properties }) => {
+function prepareDocumentationParts(futureParts, currentParts ) {
+  return futureParts.reduce((prev, { restApiId, location, properties }, i) => {
     const hasPart = currentParts.find((part) => {
+      const locationPath = location.path ? `/${location.path}` : undefined
       return part.location && part.location.type === location.type &&
-        part.location.path === `/${location.path}` &&
-        part.location.method === location.method &&
-        part.location.statusCode === location.statusCode && 
-        part.location.name === location.name
+      part.location.path === locationPath &&
+      part.location.method === location.method &&
+      part.location.statusCode === location.statusCode && 
+      part.location.name === location.name
     });
-
     if (hasPart) {
-      if (JSON.stringify(properties) !== hasPart.properties) {
-        prev.toDelete.push({ id: hasPart.id });
-        prev.toUpload.push({ location, properties, restApiId });
+      if (JSON.parse(hasPart.properties).delete) {
+        prev.toDelete.push({ id: hasPart.id, restApiId });
+        return prev
+      } else{
+        if (JSON.stringify(properties) !== hasPart.properties) {
+          prev.toDelete.push({ id: hasPart.id, restApiId });
+          prev.toUpload.push({ location, properties, restApiId });
+        }
       }
     } else {
-      prev.toUpload.push({ location, properties, restApiId });
+      if (!properties.delete) {
+        prev.toUpload.push({ location, properties, restApiId });
+      }
     }
-
     return prev
   }, { toDelete: [], toUpload: [] })
-
-  // find pieces of the documentation to delete
-  localDocumentationParts = currentParts.reduce((prev, { id, location }) => {
-    const hasPart = remoteDocumentationParts.find((part) => {
-      return part.location && part.location.type === location.type &&
-        part.location.path === `/${location.path}` &&
-        part.location.method === location.method &&
-        part.location.statusCode === location.statusCode && 
-        part.location.name === location.name
-    });
-
-    if (!hasPart) {
-      prev.toDelete.push({ id });
-    }
-
-    return prev
-  }, localDocumentationParts)
-
-  return localDocumentationParts
 }
 
 function getDocumentationMethods(documentationParts) {
@@ -125,6 +168,7 @@ module.exports = function() {
         return loc;
       }, {});
       location.type = part.type;
+      
       const propertiesToGet = determinePropertiesToGet(location.type)
 
       const props = getDocumentationProperties(def, propertiesToGet);
@@ -164,45 +208,47 @@ module.exports = function() {
       });
     },
     _updateDocumentationAsync: async function _updateDocumentationAsync() {
-      const update = this.customVars.documentation.update;
-      let createVersion = false;
+      console.log("----- _updateDocumentationAsync -----");
       const aws = this.serverless.providers.aws;
-      
+      const update = this.customVars.documentation.update;
+      const concurrency = this.customVars.documentation.concurrency || 100;
+      let createVersion = false;
+      let documentationToUpsert = this.documentationParts
+      let documentationToDelete = []
       try {
-        const documentationVersion = this.getDocumentationVersion()
         await aws.request('APIGateway', 'getDocumentationVersion', {
           restApiId: this.restApiId,
-          documentationVersion,
+          documentationVersion: this.getDocumentationVersion(),
         });
       } catch (err) {
         if (err.providerError && err.providerError.statusCode === 404) {
-          console.info("Creating new documentation version")
           createVersion = true;
         }
-        else {
-          return Promise.reject(err);
-        }
+        return Promise.reject(err);
       }
-
-      let results = await getDocumentationPartsPromise(aws, this.restApiId);
+      let documentationParts = await getDocumentationPartsPromise(aws, this.restApiId);
       if (update) {
-        const { toDelete, toUpload } = prepareDocumentationParts(this.documentationParts, results)
-        results = toDelete;
-        this.documentationParts = toUpload;
+        const { toDelete, toUpload } = prepareDocumentationParts(this.documentationParts, documentationParts)
+        documentationToDelete = toDelete;
+        documentationToUpsert = toUpload;
       }
-      const deleteDocumentationParts = results.map(part => aws.request('APIGateway', 'deleteDocumentationPart', {
-        documentationPartId: part.id,
-        restApiId: this.restApiId,
-      }))
-
-      await Promise.all(deleteDocumentationParts);
-
-      await this.documentationParts.reduce((promise, part) => {
-        return promise.then(() => {
-          part.properties = JSON.stringify(part.properties);
-          return aws.request('APIGateway', 'createDocumentationPart', part);
-        });
-      }, Promise.resolve())
+      let requests = createDocumentationRequests(aws, {
+        documentationToUpsert,
+        documentationToDelete
+      })
+      
+      try {
+        console.log("sending documentation requests");
+        console.log("documentation request concurrency: ", concurrency);
+        let i = 0
+        while (requests.length) {
+          console.log("iterations: ", ++i);
+          await resolveDocumentationRequests(requests.splice(0, concurrency))     
+        }
+      } catch (error) {
+        console.error("error in updating documentation", error);
+      }
+      console.log("finished documentation requests");
 
       const methodsParts = getDocumentationMethods(this.documentationParts);
       return createVersion && methodsParts.length ? aws.request('APIGateway', 'createDocumentationVersion', {
@@ -253,7 +299,7 @@ module.exports = function() {
       });
 
       autoVersion = objectHash(versionObject);
-      console.info("New Documentation version: ", autoVersion)
+
       return autoVersion;
     },
 
@@ -302,7 +348,6 @@ module.exports = function() {
         resource.DependsOn = new Set();
         this.addMethodResponses(resource, eventTypes.http.documentation);
         this.addRequestModels(resource, eventTypes.http.documentation);
-
         if (!this.options['doc-safe-mode']) {
           this.addDocumentationToApiGateway(
             resource,
