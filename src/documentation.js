@@ -37,7 +37,7 @@ function createDocumentationRequests(aws, { documentationToUpsert, documentation
   // delete documentation parts
   requests = requests.concat(
     documentationToDelete.map(part => {
-      return{ 
+      return { 
         request: aws.request('APIGateway', 'deleteDocumentationPart', {
           documentationPartId: part.id,
           restApiId: part.restApiId,
@@ -170,7 +170,7 @@ module.exports = function() {
       location.type = part.type;
       
       const propertiesToGet = determinePropertiesToGet(location.type)
-      
+
       const props = getDocumentationProperties(def, propertiesToGet);
       if (props.size > 0) {
         this.documentationParts.push({
@@ -242,8 +242,7 @@ module.exports = function() {
         console.log("documentation request concurrency: ", concurrency);
         let i = 0
         while (requests.length) {
-          i += 1
-          console.log("iterations: ", i);
+          console.log("iterations: ", ++i);
           await resolveDocumentationRequests(requests.splice(0, concurrency))     
         }
       } catch (error) {
