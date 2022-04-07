@@ -44,6 +44,10 @@ class ServerlessAWSDocumentation {
               'downloadDocumentation',
             ],
             options: {
+                type: {
+                    required: false,
+                    type: 'string'
+                },
                 outputFileName: {
                   required: true,
                   type: 'string'
