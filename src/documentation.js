@@ -223,8 +223,9 @@ module.exports = function() {
       } catch (err) {
         if (err.providerError && err.providerError.statusCode === 404) {
           createVersion = true;
+        } else {
+          return Promise.reject(err);
         }
-        return Promise.reject(err);
       }
       let documentationParts = await getDocumentationPartsPromise(aws, this.restApiId);
       if (update) {
